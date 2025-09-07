@@ -274,14 +274,26 @@
     const now = () => new Date().toLocaleTimeString();
 
     function pickNUnique(arr, n) {
-      const pool = [...arr];
-      const out = [];
-      while (out.length < n && pool.length) {
-        const i = Math.floor(Math.random() * pool.length);
-        out.push(pool.splice(i,1)[0]);
-      }
-      return out;
-    }
+  const pool = [...arr];
+  const out = [];
+  while (out.length < n && pool.length) {
+    const i = Math.floor(Math.random() * pool.length);
+    out.push(pool.splice(i,1)[0]);
+  }
+  return out;
+}
+
+// Firestore: nested arrays 금지 → 문자열로 인코딩
+function encodeTileOptions(opts) {
+  return (opts || []).map(arr => Array.isArray(arr) ? arr.join('|') : '');
+}
+function decodeTileOptions(data) {
+  return (data || []).map(val => {
+    if (Array.isArray(val)) return val;         // 로컬/하위호환
+    if (typeof val === 'string') return val ? val.split('|') : [];
+    return [];
+  });
+}
 
     function pickId() { return Math.random().toString(36).slice(2, 10); }
     function randRoom() {
@@ -787,13 +799,20 @@ function abbrName(name) {             // 말(토큰)용 2자
     }
 
     function fromDocState(s) {
-      players = (s.players || []).map(p => ({...p}));
-      turn = s.turn || 0; dice = s.dice || null; awaitingMove = !!s.awaitingMove; awaitingChoice = !!s.awaitingChoice;
-      tileOptions = s.tileOptions || []; orders = s.orders || [];
-      viewPid = Math.min(viewPid, Math.max(0, players.length-1));
-      diceFace.textContent = dice ? String(dice) : '–';
-      renderPlayerTabs(); updateInventoryUI(); renderChoices(); renderOrders(); setButtons(); draw();
-    }
+  players = (s.players || []).map(p => ({...p}));
+  turn = s.turn || 0; dice = s.dice || null;
+  awaitingMove = !!s.awaitingMove; awaitingChoice = !!s.awaitingChoice;
+
+  // ⬇️ 변경: Firestore → 로컬 구조로 디코딩
+  tileOptions = decodeTileOptions(s.tileOptions);
+  orders = s.orders || [];
+
+  viewPid = Math.min(viewPid, Math.max(0, players.length-1));
+  diceFace.textContent = dice ? String(dice) : '–';
+  renderPlayerTabs(); updateInventoryUI(); renderChoices(); renderOrders(); setButtons(); draw();
+}
+
+
 
     async function createRoom() {
   if (!db) { alert('Firebase 설정이 필요합니다.'); return; }
@@ -826,21 +845,36 @@ function abbrName(name) {             // 말(토큰)용 2자
   isHost = (s0.hostId === myId);   // ✅ 호스트 판단
 
   await db.runTransaction(async (t) => {
-    const s = (await t.get(ref)).data();
-    let ps = s.players || [];
-    if (!ps.find(p => p.id === myId)) {
-      if (ps.length >= 6) throw new Error('정원 초과');
-      ps = [...ps, {
-        id: myId, name, color: PLAYER_COLORS[ps.length % PLAYER_COLORS.length],
-        pos: 0, money: START_MONEY, dishes: 0, inv: {}, dishCounts: {}, rolls: 0
-      }];
-    }
-    t.update(ref, {
-      players: ps,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      version: (s.version||0) + 1
-    });
+  const doc = await t.get(roomRef);
+  const s = doc.data();
+  if ((s.players || []).length < 1) throw new Error('플레이어 없음');
+
+  const ids = INGREDIENTS.map(x => x.id);
+  const newOpts = Array.from({ length: PATH.length }, (_, i) =>
+    i === 0 ? [] : pickNUnique(ids, 3)
+  );
+  const ord = pickNUnique(RECIPES.map(r => r.id), ORDER_COUNT);
+  const ps = (s.players || []).map((p, i) => ({
+    ...p,
+    pos: 0, money: START_MONEY, dishes: 0, inv: {}, dishCounts: {}, rolls: 0,
+    color: PLAYER_COLORS[i % PLAYER_COLORS.length]
+  }));
+
+  t.update(roomRef, {
+    status: 'playing',
+    // 변경: 인코딩 후 저장
+    tileOptions: encodeTileOptions(newOpts),
+    orders: ord,
+    players: ps,
+    turn: 0,
+    dice: null,
+    awaitingMove: false,
+    awaitingChoice: false,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    version: (s.version || 0) + 1
   });
+});
+
 
   online = true; roomId = code; roomRef = ref; subscribeRoom();
   mpStatus.textContent = `입장: ${code} (${isHost ? '호스트' : '게스트'})`;
@@ -867,11 +901,12 @@ function abbrName(name) {             // 말(토큰)용 2자
   roomUnsub = roomRef.onSnapshot((snap) => {
     if (!snap.exists) return;
     const s = snap.data();
-    isHost = (s.hostId === myId); // ✅ 호스트 유지
+    isHost = (s.hostId === myId);
     fromDocState(s);
     mpStatus.textContent = `${roomId} · ${s.status === 'lobby' ? '대기실' : '게임중'} · ${isHost ? '호스트' : '게스트'}`;
   });
 }
+
 
     async function startOnline() {
   if (!online || !roomRef) { log('⚠️ 방에 연결되지 않았습니다'); return; }
@@ -879,44 +914,34 @@ function abbrName(name) {             // 말(토큰)용 2자
   try {
     log('⏳ 온라인 시작 시도');
     await db.runTransaction(async (t) => {
-      const doc = await t.get(roomRef);
-      const s = doc.data();
-      if ((s.players || []).length < 1) throw new Error('플레이어 없음');
+      const doc = await t.get(roomRef); const s = doc.data();
+      if ((s.players||[]).length < 1) throw new Error('플레이어 없음');
 
-      const ids = INGREDIENTS.map(x => x.id);
+      const ids = INGREDIENTS.map(x=>x.id);
       const newOpts = Array.from({ length: PATH.length }, (_, i) => i === 0 ? [] : pickNUnique(ids, 3));
-      const ord = pickNUnique(RECIPES.map(r => r.id), ORDER_COUNT);
-      const ps = (s.players || []).map((p, i) => ({
-        ...p,
-        pos: 0,
-        money: START_MONEY,
-        dishes: 0,
-        inv: {},
-        dishCounts: {},
-        rolls: 0,
+      const ord = pickNUnique(RECIPES.map(r=>r.id), ORDER_COUNT);
+      const ps = (s.players||[]).map((p,i)=>({
+        ...p, pos:0, money:START_MONEY, dishes:0, inv:{}, dishCounts:{}, rolls:0,
         color: PLAYER_COLORS[i % PLAYER_COLORS.length]
       }));
 
+      // ⬇️ 변경: tileOptions 인코딩하여 저장
       t.update(roomRef, {
-        status: 'playing',
-        tileOptions: newOpts,
+        status:'playing',
+        tileOptions: encodeTileOptions(newOpts),
         orders: ord,
         players: ps,
-        turn: 0,
-        dice: null,
-        awaitingMove: false,
-        awaitingChoice: false,
+        turn: 0, dice: null,
+        awaitingMove:false, awaitingChoice:false,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        version: (s.version || 0) + 1
+        version:(s.version||0)+1
       });
     });
     log('🚀 온라인 게임 시작');
   } catch (e) {
-    console.warn(e);
-    log(`❌ 시작 실패: ${e.message || e}`);
+    console.warn(e); log(`❌ 시작 실패: ${e.message || e}`);
   }
 }
-
 
     async function commitAction(type, payload) {
       if (!online || !roomRef) return;
@@ -935,18 +960,33 @@ function abbrName(name) {             // 말(토큰)용 2자
 
           switch (type) {
             case 'ROLL': {
-              if (!isMyTurn) throw new Error('내 차례가 아님');
-              if (s.awaitingMove || s.awaitingChoice || s.dice) throw new Error('이미 굴림');
-              const d = 1 + Math.floor(Math.random() * 6);
-              ps[turnIdx].rolls = (ps[turnIdx].rolls || 0) + 1;
-              let newOpts = s.tileOptions;
-              if (ps.every(p => (p.rolls||0) >= ROLLS_BEFORE_RESET)) {
-                newOpts = Array.from({ length: PATH.length }, (_, i) => i === 0 ? [] : pickNUnique(ids, 3));
-                ps.forEach(p => p.rolls = 0);
-              }
-              t.update(roomRef, { players: ps, dice: d, awaitingMove: true, tileOptions: newOpts, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), version:(s.version||0)+1 });
-              break;
-            }
+  if (!isMyTurn) throw new Error('내 차례가 아님');
+  if (s.awaitingMove || s.awaitingChoice || s.dice) throw new Error('이미 굴림');
+
+  const d = 1 + Math.floor(Math.random() * 6);
+  ps[turnIdx].rolls = (ps[turnIdx].rolls || 0) + 1;
+
+  // 저장 형식 유지: 기본은 문자열 배열, 리셋 시 새로 인코딩
+  let newOpts = s.tileOptions; // 이미 인코딩(문자열 배열)일 수 있음
+  if (ps.every(p => (p.rolls || 0) >= ROLLS_BEFORE_RESET)) {
+    const fresh = Array.from({ length: PATH.length }, (_, i) =>
+      i === 0 ? [] : pickNUnique(ids, 3)
+    );
+    newOpts = encodeTileOptions(fresh);  // ⬅️ 리셋 시 인코딩
+    ps.forEach(p => p.rolls = 0);
+  }
+
+  t.update(roomRef, {
+    players: ps,
+    dice: d,
+    awaitingMove: true,
+    tileOptions: newOpts, // ⬅️ 항상 문자열 배열
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    version:(s.version||0)+1
+  });
+  break;
+}
+
             case 'MOVE': {
               if (!isMyTurn) throw new Error('내 차례가 아님');
               if (!s.awaitingMove || !s.dice) throw new Error('이동 불가');
@@ -959,17 +999,34 @@ function abbrName(name) {             // 말(토큰)용 2자
               break;
             }
             case 'CHOOSE_OPTION': {
-              if (!isMyTurn) throw new Error('내 차례가 아님');
-              if (!s.awaitingChoice) throw new Error('선택 단계가 아님');
-              const pos = ps[turnIdx].pos || 0; const opts = (s.tileOptions[pos]||[]); const idx = payload.index|0; const chosenId = opts[idx];
-              const cost = priceOf(chosenId);
-              if ((ps[turnIdx].money||0) < cost) throw new Error('돈 부족');
-              ps[turnIdx].money -= cost; ps[turnIdx].inv = ps[turnIdx].inv || {}; ps[turnIdx].inv[chosenId] = (ps[turnIdx].inv[chosenId]||0) + 1;
-              const next = { ...s, players: ps, awaitingChoice: false, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), version:(s.version||0)+1 };
-              endTurn(next);
-              t.update(roomRef, next);
-              break;
-            }
+  if (!isMyTurn) throw new Error('내 차례가 아님');
+  if (!s.awaitingChoice) throw new Error('선택 단계가 아님');
+  const pos = ps[turnIdx].pos || 0;
+
+  // ⬇️ 변경: 디코딩 후 현재 칸 옵션 사용
+  const decoded = decodeTileOptions(s.tileOptions);
+  const opts = (decoded[pos] || []);
+  const idx = payload.index|0; const chosenId = opts[idx];
+
+  const cost = priceOf(chosenId);
+  if ((ps[turnIdx].money||0) < cost) throw new Error('돈 부족');
+
+  ps[turnIdx].money -= cost;
+  ps[turnIdx].inv = ps[turnIdx].inv || {};
+  ps[turnIdx].inv[chosenId] = (ps[turnIdx].inv[chosenId]||0) + 1;
+
+  const next = {
+    ...s,
+    players: ps,
+    awaitingChoice: false,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    version:(s.version||0)+1
+  };
+  endTurn(next);
+  t.update(roomRef, next);
+  break;
+}
+
             case 'CHOOSE_NONE': {
               if (!isMyTurn) throw new Error('내 차례가 아님');
               if (!s.awaitingChoice) throw new Error('선택 단계가 아님');
