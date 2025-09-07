@@ -295,6 +295,15 @@
       logEl.innerHTML = `<div><span class="text-slate-400">[${now()}]</span> ${msg}</div>` + logEl.innerHTML;
     }
 
+    function shortName(name) {            // 탭용(최대 6자)
+  const s = String(name || '');
+  return s.length > 6 ? s.slice(0, 6) + '…' : s;
+}
+function abbrName(name) {             // 말(토큰)용 2자
+  const s = String(name || '');
+  return s.slice(0, 2);
+}
+
     // ===== Game State (local mirror) =====
     let players = [];   // [{ id, name, color, pos, inv:Object, dishes:number, money:number, dishCounts:Object, rolls:number }]
     let turn = 0;       // index
@@ -323,27 +332,42 @@
 
     // ===== Rendering =====
     function setButtons() {
-      const isMyTurn = players.length && players[turn] && players[turn].id === myId;
-      rollBtn.disabled = animating || awaitingMove || awaitingChoice || players.length === 0 || (online && !isMyTurn);
-      moveForwardBtn.disabled = animating || !awaitingMove || awaitingChoice || (online && !isMyTurn);
-      passBtn.disabled = animating || players.length === 0 || (online && !isMyTurn && !awaitingChoice && !awaitingMove);
-      rollBtn.className = `px-4 py-2 rounded-xl text-white ${rollBtn.disabled ? 'bg-slate-300' : 'bg-indigo-500 hover:bg-indigo-600'}`;
-      moveForwardBtn.className = `px-3 py-2 rounded-xl text-white ${moveForwardBtn.disabled ? 'bg-slate-300' : 'bg-emerald-500 hover:bg-emerald-600'}`;
-      const p = players[turn] || { pos: 0 };
-      turnLabel.textContent = players.length ? `P${turn+1}` : '-';
-      posLabel.textContent = players.length ? `${p.pos} / ${PATH.length}` : `- / ${PATH.length}`;
-      tileIndexEl.textContent = players.length ? p.pos : '-';
-      ordersTarget.textContent = players.length ? `P${viewPid+1}` : '-';
-      const hintBase = online ? (players.length ? `(${isMyTurn ? '내 차례' : '상대 차례'})` : '') : '(로컬)';
-      hintEl.textContent = !players.length
-        ? '플레이어 수(1~6)를 입력해 시작하세요.'
-        : awaitingMove
-          ? `앞으로 ${dice}칸 이동하세요. ${hintBase}`
-          : awaitingChoice
-            ? `재료 1개 선택(1/2/3) 또는 건너뛰기(0). ${hintBase}`
-            : `주사위를 굴리세요. ${hintBase}`;
-      updateMoneyDishesUI();
-    }
+  const isMyTurn = players.length && players[turn] && players[turn].id === myId;
+
+  rollBtn.disabled = animating || awaitingMove || awaitingChoice || players.length === 0 || (online && !isMyTurn);
+  moveForwardBtn.disabled = animating || !awaitingMove || awaitingChoice || (online && !isMyTurn);
+  passBtn.disabled = animating || players.length === 0 || (online && !isMyTurn && !awaitingChoice && !awaitingMove);
+
+  rollBtn.className = `px-4 py-2 rounded-xl text-white ${rollBtn.disabled ? 'bg-slate-300' : 'bg-indigo-500 hover:bg-indigo-600'}`;
+  moveForwardBtn.className = `px-3 py-2 rounded-xl text-white ${moveForwardBtn.disabled ? 'bg-slate-300' : 'bg-emerald-500 hover:bg-emerald-600'}`;
+
+  const p = players[turn] || { pos: 0 };
+  const currentName = players.length ? (players[turn].name || `P${turn+1}`) : '-';
+  turnLabel.textContent = currentName;
+  posLabel.textContent = players.length ? `${p.pos} / ${PATH.length}` : `- / ${PATH.length}`;
+  tileIndexEl.textContent = players.length ? p.pos : '-';
+  ordersTarget.textContent = players.length ? (players[viewPid].name || `P${viewPid+1}`) : '-';
+
+  const hintBase = online ? (players.length ? `(${isMyTurn ? '내 차례' : '상대 차례'})` : '') : '(로컬)';
+  hintEl.textContent = !players.length
+    ? '플레이어 수(1~6)를 입력해 시작하세요.'
+    : awaitingMove
+      ? `앞으로 ${dice}칸 이동하세요. ${hintBase}`
+      : awaitingChoice
+        ? `재료 1개 선택(1/2/3) 또는 건너뛰기(0). ${hintBase}`
+        : `주사위를 굴리세요. ${hintBase}`;
+
+  updateMoneyDishesUI();
+
+  // 온라인 시작 버튼 상태
+  if (startOnlineBtn) {
+    const canStart = online && isHost && !!roomRef;
+    startOnlineBtn.disabled = !canStart;
+    startOnlineBtn.title = canStart ? '' : '호스트만 시작 가능 (방 생성/입장 필요)';
+    startOnlineBtn.className = `px-2 py-1 rounded-lg ${canStart ? 'bg-emerald-500 text-white' : 'bg-slate-300 text-white'}`;
+  }
+}
+
 
     function updateMoneyDishesUI() {
       if (!players.length) { moneyLabel.textContent = '0'; dishesLabel.textContent = '0'; return; }
@@ -374,17 +398,20 @@
     }
 
     function updateInventoryUI() {
-      viewLabel.textContent = `P${viewPid+1}`;
-      updateMoneyDishesUI();
-      invEl.innerHTML = '';
-      if (invCollapsed) { invEl.classList.add('hidden'); return; }
-      invEl.classList.remove('hidden');
-      if (showAllInventories) {
-        players.forEach((_, i) => invEl.appendChild(renderInventoryListFor(i)));
-      } else if (players[viewPid]) {
-        invEl.appendChild(renderInventoryListFor(viewPid));
-      }
-    }
+  viewLabel.textContent = players[viewPid] ? (players[viewPid].name || `P${viewPid+1}`) : '-';
+  updateMoneyDishesUI();
+
+  invEl.innerHTML = '';
+  if (invCollapsed) { invEl.classList.add('hidden'); return; }
+  invEl.classList.remove('hidden');
+
+  if (showAllInventories) {
+    players.forEach((_, i) => invEl.appendChild(renderInventoryListFor(i)));
+  } else if (players[viewPid]) {
+    invEl.appendChild(renderInventoryListFor(viewPid));
+  }
+}
+
 
     function renderChoices() {
       choicesEl.innerHTML = '';
@@ -421,21 +448,23 @@
     }
 
     function renderPlayerTabs() {
-      playerTabsEl.innerHTML = '';
-      players.forEach((p, i) => {
-        const btn = document.createElement('button');
-        const activeTurn = (i === turn);
-        const viewing = (i === viewPid);
-        btn.className = `w-9 h-9 rounded-xl border grid place-items-center text-sm font-semibold` +
-                        (activeTurn ? ' ring-2 ring-indigo-500' : '') +
-                        (viewing ? ' bg-slate-100' : '');
-        btn.style.borderColor = p.color;
-        btn.textContent = i + 1;
-        btn.title = `플레이어 ${i+1}${p.name?` · ${p.name}`:''}`;
-        btn.addEventListener('click', () => { viewPid = i; updateInventoryUI(); renderPlayerTabs(); renderOrders(); });
-        playerTabsEl.appendChild(btn);
-      });
-    }
+  playerTabsEl.innerHTML = '';
+  players.forEach((p, i) => {
+    const btn = document.createElement('button');
+    const activeTurn = (i === turn);
+    const viewing = (i === viewPid);
+
+    btn.className = `px-2 h-9 rounded-xl border grid place-items-center text-xs font-semibold whitespace-nowrap`
+                    + (activeTurn ? ' ring-2 ring-indigo-500' : '')
+                    + (viewing ? ' bg-slate-100' : '');
+    btn.style.borderColor = p.color;
+    btn.textContent = shortName(p.name || `P${i+1}`);
+    btn.title = `플레이어 ${i+1}${p.name ? ` · ${p.name}` : ''}`;
+    btn.addEventListener('click', () => { viewPid = i; updateInventoryUI(); renderPlayerTabs(); renderOrders(); });
+    playerTabsEl.appendChild(btn);
+  });
+}
+
 
     // ===== Orders =====
     function rollOrders() {
@@ -644,16 +673,38 @@
     }
 
     function drawTokens() {
-      players.forEach((pl, i) => {
-        const p = PATH[pl.pos]; const c = centerOf(p.gx, p.gy);
-        const offsetAngle = (i * (Math.PI * 2)) / Math.max(4, players.length);
-        const rOff = 10; const ox = Math.cos(offsetAngle) * rOff; const oy = Math.sin(offsetAngle) * rOff;
-        ctx.beginPath(); ctx.arc(c.x + ox, c.y + oy, TILE * 0.26, 0, Math.PI * 2);
-        ctx.fillStyle = pl.color; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = '#1f2937'; ctx.stroke();
-        ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px ui-sans-serif'; ctx.fillText(String(i+1), c.x + ox, c.y + oy);
-        if (i === turn) { ctx.beginPath(); ctx.arc(c.x + ox, c.y + oy, TILE * 0.32, 0, Math.PI * 2); ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 3; ctx.stroke(); }
-      });
+  players.forEach((pl, i) => {
+    const p = PATH[pl.pos];
+    const c = centerOf(p.gx, p.gy);
+    const offsetAngle = (i * (Math.PI * 2)) / Math.max(4, players.length);
+    const rOff = 10;
+    const ox = Math.cos(offsetAngle) * rOff;
+    const oy = Math.sin(offsetAngle) * rOff;
+
+    ctx.beginPath();
+    ctx.arc(c.x + ox, c.y + oy, TILE * 0.26, 0, Math.PI * 2);
+    ctx.fillStyle = pl.color;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#1f2937';
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 14px ui-sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(abbrName(pl.name || `P${i+1}`), c.x + ox, c.y + oy);  // ← 변경된 라벨
+
+    if (i === turn) {
+      ctx.beginPath();
+      ctx.arc(c.x + ox, c.y + oy, TILE * 0.32, 0, Math.PI * 2);
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 3;
+      ctx.stroke();
     }
+  });
+}
+
 
     function draw() { drawBoard(); drawTokens(); }
 
@@ -717,6 +768,7 @@
     function stateSkeleton() {
       return {
         status: 'lobby', // 'lobby' | 'playing'
+        hostId: null,
         version: 0,
         createdAt: firebase.firestore.FieldValue.serverTimestamp?.() || null,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp?.() || null,
@@ -744,32 +796,56 @@
     }
 
     async function createRoom() {
-      if (!db) { alert('Firebase 설정이 필요합니다.'); return; }
-      const code = randRoom();
-      const ref = db.collection('rooms').doc(code);
-      await ref.set(stateSkeleton());
-      isHost = true; online = true; roomId = code; roomRef = ref; subscribeRoom();
-      mpStatus.textContent = `방 생성: ${code} (호스트)`; roomInput.value = code; log(`🛠️ 방 생성: ${code}`);
-    }
+  if (!db) { alert('Firebase 설정이 필요합니다.'); return; }
+  const code = randRoom();
+  const ref = db.collection('rooms').doc(code);
+  const name = (nameInput.value.trim() || `호스트-${myId.slice(0,4)}`).slice(0,16);
+  const hostPlayer = {
+    id: myId, name, color: PLAYER_COLORS[0],
+    pos: 0, money: START_MONEY, dishes: 0, inv: {}, dishCounts: {}, rolls: 0
+  };
+  await ref.set({
+    ...stateSkeleton(),
+    hostId: myId,              // ✅ 호스트 지정
+    players: [hostPlayer],     // ✅ 호스트를 players에 즉시 등록
+  });
+  isHost = true; online = true; roomId = code; roomRef = ref; subscribeRoom();
+  mpStatus.textContent = `방 생성: ${code} (호스트)`; roomInput.value = code;
+  log(`🛠️ 방 생성: ${code}`);
+}
 
     async function joinRoom() {
-      if (!db) { alert('Firebase 설정이 필요합니다.'); return; }
-      const code = roomInput.value.trim().toUpperCase(); if (!code) return alert('방 코드를 입력하세요');
-      const name = (nameInput.value.trim() || `손님-${myId.slice(0,4)}`).slice(0,16);
-      const ref = db.collection('rooms').doc(code); const snap = await ref.get();
-      if (!snap.exists) return alert('방이 존재하지 않습니다');
-      await db.runTransaction(async (t) => {
-        const s = (await t.get(ref)).data();
-        let ps = s.players || [];
-        if (!ps.find(p => p.id === myId)) {
-          if (ps.length >= 6) throw new Error('정원 초과');
-          ps = [...ps, { id: myId, name, color: PLAYER_COLORS[ps.length % PLAYER_COLORS.length], pos: 0, money: START_MONEY, dishes: 0, inv: {}, dishCounts: {}, rolls: 0 }];
-        }
-        t.update(ref, { players: ps, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), version: (s.version||0)+1 });
-      });
-      isHost = false; online = true; roomId = code; roomRef = ref; subscribeRoom();
-      mpStatus.textContent = `입장: ${code} (게스트)`; log(`🚪 방 입장: ${code}`);
+  if (!db) { alert('Firebase 설정이 필요합니다.'); return; }
+  const code = roomInput.value.trim().toUpperCase(); if (!code) return alert('방 코드를 입력하세요');
+  const name = (nameInput.value.trim() || `손님-${myId.slice(0,4)}`).slice(0,16);
+  const ref = db.collection('rooms').doc(code);
+  const snap = await ref.get();
+  if (!snap.exists) return alert('방이 존재하지 않습니다');
+
+  const s0 = snap.data();
+  isHost = (s0.hostId === myId);   // ✅ 호스트 판단
+
+  await db.runTransaction(async (t) => {
+    const s = (await t.get(ref)).data();
+    let ps = s.players || [];
+    if (!ps.find(p => p.id === myId)) {
+      if (ps.length >= 6) throw new Error('정원 초과');
+      ps = [...ps, {
+        id: myId, name, color: PLAYER_COLORS[ps.length % PLAYER_COLORS.length],
+        pos: 0, money: START_MONEY, dishes: 0, inv: {}, dishCounts: {}, rolls: 0
+      }];
     }
+    t.update(ref, {
+      players: ps,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      version: (s.version||0) + 1
+    });
+  });
+
+  online = true; roomId = code; roomRef = ref; subscribeRoom();
+  mpStatus.textContent = `입장: ${code} (${isHost ? '호스트' : '게스트'})`;
+  log(`🚪 방 입장: ${code}`);
+}
 
     async function leaveRoom() {
       if (!online || !roomRef) return;
@@ -787,28 +863,60 @@
     }
 
     function subscribeRoom() {
-      roomUnsub && roomUnsub();
-      roomUnsub = roomRef.onSnapshot((snap) => {
-        if (!snap.exists) return;
-        const s = snap.data();
-        fromDocState(s);
-        mpStatus.textContent = `${roomId} · ${s.status === 'lobby' ? '대기실' : '게임중'} · ${isHost ? '호스트' : '게스트'}`;
-      });
-    }
+  roomUnsub && roomUnsub();
+  roomUnsub = roomRef.onSnapshot((snap) => {
+    if (!snap.exists) return;
+    const s = snap.data();
+    isHost = (s.hostId === myId); // ✅ 호스트 유지
+    fromDocState(s);
+    mpStatus.textContent = `${roomId} · ${s.status === 'lobby' ? '대기실' : '게임중'} · ${isHost ? '호스트' : '게스트'}`;
+  });
+}
 
     async function startOnline() {
-      if (!online || !isHost || !roomRef) return alert('호스트만 시작할 수 있습니다');
-      await db.runTransaction(async (t) => {
-        const doc = await t.get(roomRef); const s = doc.data();
-        if ((s.players||[]).length < 1) throw new Error('플레이어 없음');
-        const ids = INGREDIENTS.map(x=>x.id);
-        const newOpts = Array.from({ length: PATH.length }, (_, i) => i === 0 ? [] : pickNUnique(ids, 3));
-        const ord = pickNUnique(RECIPES.map(r=>r.id), ORDER_COUNT);
-        const ps = (s.players||[]).map((p,i)=>({ ...p, pos:0, money:START_MONEY, dishes:0, inv:{}, dishCounts:{}, rolls:0, color: PLAYER_COLORS[i % PLAYER_COLORS.length] }));
-        t.update(roomRef, { status:'playing', tileOptions:newOpts, orders:ord, players:ps, turn:0, dice:null, awaitingMove:false, awaitingChoice:false, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), version:(s.version||0)+1 });
+  if (!online || !roomRef) { log('⚠️ 방에 연결되지 않았습니다'); return; }
+  if (!isHost) { log('⚠️ 호스트만 시작할 수 있습니다'); return; }
+  try {
+    log('⏳ 온라인 시작 시도');
+    await db.runTransaction(async (t) => {
+      const doc = await t.get(roomRef);
+      const s = doc.data();
+      if ((s.players || []).length < 1) throw new Error('플레이어 없음');
+
+      const ids = INGREDIENTS.map(x => x.id);
+      const newOpts = Array.from({ length: PATH.length }, (_, i) => i === 0 ? [] : pickNUnique(ids, 3));
+      const ord = pickNUnique(RECIPES.map(r => r.id), ORDER_COUNT);
+      const ps = (s.players || []).map((p, i) => ({
+        ...p,
+        pos: 0,
+        money: START_MONEY,
+        dishes: 0,
+        inv: {},
+        dishCounts: {},
+        rolls: 0,
+        color: PLAYER_COLORS[i % PLAYER_COLORS.length]
+      }));
+
+      t.update(roomRef, {
+        status: 'playing',
+        tileOptions: newOpts,
+        orders: ord,
+        players: ps,
+        turn: 0,
+        dice: null,
+        awaitingMove: false,
+        awaitingChoice: false,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        version: (s.version || 0) + 1
       });
-      log('🚀 온라인 게임 시작');
-    }
+    });
+    log('🚀 온라인 게임 시작');
+  } catch (e) {
+    console.warn(e);
+    log(`❌ 시작 실패: ${e.message || e}`);
+  }
+}
+
 
     async function commitAction(type, payload) {
       if (!online || !roomRef) return;
